@@ -28,13 +28,15 @@ jobs:
           mkdir build_app
           cd build_app
           flutter create --platforms=android --org com.reelmind --project-name reelmind .
-          flutter pub add file_picker http url_launcher
+          flutter pub add image_picker file_picker video_player http url_launcher
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
           import 'dart:io';
           import 'package:flutter/material.dart';
+          import 'package:image_picker/image_picker.dart';
           import 'package:file_picker/file_picker.dart';
+          import 'package:video_player/video_player.dart';
           import 'package:http/http.dart' as http;
           import 'package:url_launcher/url_launcher.dart';
 
@@ -45,7 +47,7 @@ jobs:
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
-                title: 'ReelMind AI',
+                title: 'ReelMind AI v2',
                 debugShowCheckedModeBanner: false,
                 theme: ThemeData.dark().copyWith(
                   scaffoldBackgroundColor: const Color(0xFF0D0D12),
@@ -69,8 +71,9 @@ jobs:
 
           class _ReelMindHomeState extends State<ReelMindHome> {
             int _tab = 1;
+            final ImagePicker _picker = ImagePicker();
             final TextEditingController _prompt = TextEditingController(
-              text: 'Transfer the exact facial expression, crying emotion, and head movement from @video1 onto the woman in @image1, synced to @audio1 voiceover.',
+              text: 'Transfer the facial expression and crying motion from @video1 onto the woman in @image1, synced to @audio1 voiceover.',
             );
             final TextEditingController _apiKeyController = TextEditingController();
 
@@ -86,27 +89,33 @@ jobs:
 
             final List<Map<String, String>> _creations = [];
 
-            Future<void> _pickMedia(String type) async {
-              FileType ft = FileType.image;
-              if (type == 'video') ft = FileType.video;
-              if (type == 'audio') ft = FileType.audio;
+            Future<void> _pickImageFromGallery() async {
+              final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+              if (image != null) {
+                setState(() {
+                  _img1Path = image.path;
+                  _img1Name = image.name;
+                });
+              }
+            }
 
-              final res = await FilePicker.platform.pickFiles(type: ft);
+            Future<void> _pickVideoFromGallery() async {
+              final XFile? video = await _picker.pickVideo(source: ImageSource.gallery);
+              if (video != null) {
+                setState(() {
+                  _vid1Path = video.path;
+                  _vid1Name = video.name;
+                  _aud1Name ??= 'Audio from @video1';
+                });
+              }
+            }
+
+            Future<void> _pickAudioFromPhone() async {
+              final res = await FilePicker.platform.pickFiles(type: FileType.audio);
               if (res != null && res.files.isNotEmpty) {
                 setState(() {
-                  if (type == 'image') {
-                    _img1Path = res.files.single.path;
-                    _img1Name = res.files.single.name;
-                  }
-                  if (type == 'video') {
-                    _vid1Path = res.files.single.path;
-                    _vid1Name = res.files.single.name;
-                    _aud1Name ??= 'Audio from @video1';
-                  }
-                  if (type == 'audio') {
-                    _aud1Path = res.files.single.path;
-                    _aud1Name = res.files.single.name;
-                  }
+                  _aud1Path = res.files.single.path;
+                  _aud1Name = res.files.single.name;
                 });
               }
             }
@@ -131,11 +140,17 @@ jobs:
             }
 
             Future<void> _generate() async {
-              if (_prompt.text.trim().isEmpty) return;
+              if (_img1Path == null && _vid1Path == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please tap @image1 and @video1 to pick files from your phone first!')),
+                );
+                return;
+              }
+
               setState(() {
                 _isGenerating = true;
                 _progress = 0.15;
-                _statusMessage = 'Preparing @image1, @video1 & @audio1...';
+                _statusMessage = 'Loading @image1, @video1 & @audio1...';
               });
 
               String outputVideoUrl = '';
@@ -144,7 +159,7 @@ jobs:
               if (apiKey.isNotEmpty && _img1Path != null && _vid1Path != null) {
                 setState(() {
                   _progress = 0.35;
-                  _statusMessage = 'Uploading references to cloud...';
+                  _statusMessage = 'Uploading references to AI server...';
                 });
                 final imgUrl = await _uploadToTempHost(_img1Path!);
                 final vidUrl = await _uploadToTempHost(_vid1Path!);
@@ -152,7 +167,7 @@ jobs:
                 if (imgUrl != null && vidUrl != null) {
                   setState(() {
                     _progress = 0.65;
-                    _statusMessage = 'Running AI Motion & LipSync Transfer...';
+                    _statusMessage = 'AI transferring @video1 motion to @image1...';
                   });
                   try {
                     final resp = await http.post(
@@ -188,6 +203,7 @@ jobs:
                   'prompt': _prompt.text.trim(),
                   'meta': '$_ratio • $_duration • ${_img1Name ?? "Image"} + ${_vid1Name ?? "Video"}',
                   'imagePath': _img1Path ?? '',
+                  'videoPath': _vid1Path ?? '',
                   'videoUrl': outputVideoUrl,
                 });
                 _tab = 2;
@@ -204,7 +220,7 @@ jobs:
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const Text(
-                        'Paste a fal.ai API key to run real LivePortrait / Act-One motion transfer from @video1 onto @image1:',
+                        'Paste a fal.ai API key to run real AI motion transfer from @video1 onto @image1:',
                         style: TextStyle(fontSize: 12, color: Colors.grey),
                       ),
                       const SizedBox(height: 10),
@@ -233,13 +249,12 @@ jobs:
                     children: [
                       Icon(Icons.auto_awesome, color: Color(0xFF00E5FF)),
                       SizedBox(width: 8),
-                      Text('ReelMind AI Studio', style: TextStyle(fontWeight: FontWeight.bold)),
+                      Text('ReelMind v2.0', style: TextStyle(fontWeight: FontWeight.bold)),
                     ],
                   ),
                   actions: [
                     IconButton(
                       icon: const Icon(Icons.vpn_key, color: Color(0xFF00E5FF)),
-                      tooltip: 'API Key',
                       onPressed: _openApiDialog,
                     ),
                   ],
@@ -301,15 +316,15 @@ jobs:
               return ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  const Text('1. Tap Boxes to Pick Real Files From Your Phone', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Text('1. Tap Boxes to Open Phone Gallery & Audio', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF00E5FF))),
                   const SizedBox(height: 10),
                   Row(
                     children: [
-                      _refBox('@image1', _img1Name ?? 'Pick Photo', Icons.image, _img1Name != null, () => _pickMedia('image'), _img1Path),
+                      _refBox('@image1', _img1Name ?? 'Open Gallery', Icons.add_photo_alternate, _img1Name != null, _pickImageFromGallery, _img1Path),
                       const SizedBox(width: 8),
-                      _refBox('@video1', _vid1Name ?? 'Pick Video', Icons.videocam, _vid1Name != null, () => _pickMedia('video'), null),
+                      _refBox('@video1', _vid1Name ?? 'Open Videos', Icons.video_call, _vid1Name != null, _pickVideoFromGallery, null),
                       const SizedBox(width: 8),
-                      _refBox('@audio1', _aud1Name ?? 'Pick Audio', Icons.audiotrack, _aud1Name != null, () => _pickMedia('audio'), null),
+                      _refBox('@audio1', _aud1Name ?? 'Open Audio', Icons.library_music, _aud1Name != null, _pickAudioFromPhone, null),
                     ],
                   ),
                   const SizedBox(height: 20),
@@ -373,20 +388,20 @@ jobs:
                 child: InkWell(
                   onTap: onTap,
                   child: Container(
-                    height: 110,
+                    height: 115,
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: const Color(0xFF1A1A24),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: active ? const Color(0xFF00E5FF) : Colors.white24, width: 1.5),
+                      border: Border.all(color: active ? const Color(0xFF00E5FF) : Colors.white24, width: 2),
                       image: (imgPath != null && imgPath.isNotEmpty)
-                          ? DecorationImage(image: FileImage(File(imgPath)), fit: BoxFit.cover, opacity: 0.55)
+                          ? DecorationImage(image: FileImage(File(imgPath)), fit: BoxFit.cover, opacity: 0.65)
                           : null,
                     ),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(icon, color: active ? const Color(0xFF00E5FF) : Colors.grey),
+                        Icon(icon, color: active ? const Color(0xFF00E5FF) : Colors.grey, size: 28),
                         const SizedBox(height: 4),
                         Text(tag, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                         Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10, color: Colors.white)),
@@ -406,6 +421,7 @@ jobs:
                 itemCount: _creations.length,
                 itemBuilder: (ctx, i) {
                   final item = _creations[i];
+                  final hasImg = item['imagePath'] != null && item['imagePath']!.isNotEmpty;
                   final hasVideoUrl = item['videoUrl'] != null && item['videoUrl']!.isNotEmpty;
                   return Card(
                     color: const Color(0xFF1A1A24),
@@ -415,6 +431,12 @@ jobs:
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          if (hasImg)
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: Image.file(File(item['imagePath']!), height: 180, width: double.infinity, fit: BoxFit.cover),
+                            ),
+                          const SizedBox(height: 10),
                           Text(item['prompt']!, style: const TextStyle(fontWeight: FontWeight.bold)),
                           const SizedBox(height: 6),
                           Text(item['meta']!, style: const TextStyle(color: Colors.grey, fontSize: 12)),
@@ -440,5 +462,5 @@ jobs:
       - name: Upload Ready-to-Install APK
         uses: actions/upload-artifact@v4
         with:
-          name: ReelMind-Android-APK
+          name: ReelMind-Android-APK-v2
           path: build_app/build/app/outputs/flutter-apk/app-release.apk
